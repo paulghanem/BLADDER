@@ -13,17 +13,18 @@ import numpy as np
 import sys 
 import matplotlib.pyplot as plt
 from keras.models import Sequential
-from keras.utils.np_utils import to_categorical
+from keras.utils import to_categorical
 from keras.layers import Conv2D,MaxPooling2D,Flatten,Dense,Dropout,SimpleRNN,LSTM
 import math 
 from timeit import  time
 from tqdm import tqdm
-from keras import backend as ker
+import tensorflow.keras.backend as ker
 import scipy.io as spio
 
-tf.compat.v1.disable_eager_execution() 
+tf.compat.v1.disable_eager_execution()
 tf.compat.v1.experimental.output_all_intermediates(True)
 
+## insert LUT model path 
 sys.path.insert(0, '/Users/siliconsynapse/Desktop/multistream_Kalman_filter/multistream_Kalman_filter/Python_LUT_Model1.4_10282023/Python_LUT_Model1.4_10282023')
 
 
@@ -40,7 +41,7 @@ from plotting import *
 
 class LUT:
     def __init__(self):
-        
+        ## initliaze states
         self.Vb=0.0498
         self.Pb=728.59
         self.Nba=0.0098
@@ -98,23 +99,29 @@ sess.run(tfc.initialize_all_variables())
 
 #generate data
 ny=3
+
+## time vector
 t= spio.loadmat('t.mat', squeeze_me=True)
 t=t['t']
 
 
-
+#load volume  and pressure data
 V = spio.loadmat('V.mat', squeeze_me=True)
 V=V['V']
 P = spio.loadmat('P.mat', squeeze_me=True)
 P=P['P']
 
+#align data and remove first 9000 samples
 V=V[9000:]
 P=P[9000:]
+
+# scale pressure data units to the model units 
 P=P*133.322
 t=t[9000:]
 t=t-t[0]
 dt=t[1]
 
+#initialize LUT
 LUT1=LUT()
 iterations=len(t)
 z=np.zeros((iterations-1,ny))
@@ -126,9 +133,10 @@ for i in range(iterations-1):
     t1=t[i:i+2]
      
     LUT1.forward(LUT1.Vb,LUT1.Pb,LUT1.Nba,t1)  
-    z[i,:]=[LUT1.Vb+0*np.random.normal(0, 1e-2, 1), LUT1.Pb+ 0*np.random.normal(0, 1e-2, 1), LUT1.Nba+ 0*np.random.normal(0, 1e-2, 1)]
+    z[i,:]=np.array([LUT1.Vb+0*np.random.normal(0, 1e-2, 1), LUT1.Pb+ 0*np.random.normal(0, 1e-2, 1), LUT1.Nba+ 0*np.random.normal(0, 1e-2, 1)]).reshape(-1,)
 
 
+## intialize z vector with Pressure and volume data from the experiment dataset.
 z[:,0]=V[1:]
 z[:,1]=P[1:]
 
@@ -136,7 +144,7 @@ z[:,1]=P[1:]
 ztrain=z.copy()
 
 
-
+#initialize window and batch sizes, batch size is the number of streams, we use 1 which means it's not multistream anymore
 window_size=1
 batch_size=1
 t_batch= np.array_split(t, batch_size+1)
@@ -145,7 +153,7 @@ t_batch=np.array(t_batch)
     
 
 
-
+#initilize NN
 model=Sequential()
 #adding layers and forming the model
 model.add(Dense(units = 30,activation='tanh',input_shape=(window_size,ny)))
@@ -159,7 +167,7 @@ model.add(Dense(units=1))
 model.compile(optimizer="adam",loss='mean_squared_error',metrics=["accuracy"])
 W=[]
 
-
+## extract weight vector
 for j,layer in enumerate(model.layers):
     weights=layer.get_weights()
     for ik in range(len(weights)):
@@ -180,14 +188,14 @@ for j in range (batch_size):
     x_hat=np.vstack([x_hat,Vb,Pb,Nba])
 
 
-#initalize cubature kalman filter parameters
+#initalize filter parameters
 n=len(x_hat) #length of neural net weights vector
-nw=len(Wk)
-nx=len(x_hat[-3*batch_size:])
-nm=int(nx*2/3)
+nw=len(Wk) #length of weights
+nx=len(x_hat[-3*batch_size:])#lengths of states
+nm=int(nx*2/3) # length of measurement vector
 
 
-#covariance matrices
+
 
 #covariance matrices
 # P=1e-2*np.identity(n)
@@ -195,7 +203,7 @@ nm=int(nx*2/3)
 # Q=1e-1*np.identity(n)
 # Q[0:nw,0:nw]=1e-2*np.identity(nw)
 
-
+#covariance matrices
 Pw=1e2*np.identity((nw))
 Px=1e-0*np.identity(nx)
 
@@ -213,7 +221,8 @@ mse=np.zeros((iterations,nm))
 epochs=30
 mse_epochs=np.zeros((epochs,ny))
 
-xtrain=np.zeros((batch_size,window_size,ny))
+
+xtrain=np.zeros((batch_size,window_size,ny))#windowed input of neural network
 dfi_dw=np.zeros((nw))
 dfi_dx=np.zeros((nx))
 
@@ -221,15 +230,19 @@ dfi_dx=np.zeros((nx))
 
 
 mse=np.zeros((t_batch.shape[1],nm))
+# initialize jacobian matrix
 F=np.zeros((n,n))
 F[0:nw,:]=np.block([[np.identity(nw), np.zeros((nw,nx))]])
 #F=np.zeros((nx,n))
+
+#gradients of neural network with respect to weights w and states x 
 output_tensor=model.output
 listOfVariableTensors=model.trainable_weights
 gradients_w_raw=ker.gradients(output_tensor,listOfVariableTensors)
 listOfVariableTensors=model.input
 gradients_x_raw=ker.gradients(output_tensor,listOfVariableTensors)
 
+# observation matrix, last row of d is zero since Nba is not measured
 d=np.block([[1, 0 , 0], [0, 1, 0],[0, 0 , 0]])
 H2=np.kron(np.eye(batch_size,dtype=int),d)
 H2 = H2[~np.all(H2 == 0, axis=1)]
@@ -237,6 +250,7 @@ H2 = H2[~np.all(H2 == 0, axis=1)]
 x_filt=np.zeros((iterations,ny))
 
 for i in range(epochs):
+    #initialize state estimates
     for o in range(batch_size):
         [LUTs[o].Vb,LUTs[o].Pb,LUTs[o].Nba]=z[int(t_batch[o,0]/dt),:]
         x_hat[nw+ny*o:nw+ny*(o+1)]=np.reshape(z[int(t_batch[o,0]/dt),:],(ny,1))
@@ -245,7 +259,8 @@ for i in range(epochs):
     for m in t_batch[:,1:].T:
         
         index=(m/dt).astype(int)
- 
+        
+        # update network input window with state estimates
         if (index[0]-1) < window_size:
             for j in range(batch_size):
                 xtrain[j,:,:]=np.matmul(np.ones((window_size,1)),x_hat[nw+ny*j:nw+ny*(j+1)].T)
@@ -256,7 +271,7 @@ for i in range(epochs):
                 xtrain[j,window_size-1,:]=x_hat[nw+ny*j:nw+ny*(j+1)].T
        
        
-           
+        #donwsclae pressure 
         xtrain[:,:,1]=(1/1000)*xtrain[:,:,1]
         #print(sf)
         tic = time.time()
@@ -266,23 +281,25 @@ for i in range(epochs):
         
         
         for o in range(batch_size):
-            
+            #evaluate gradients
             gradients_w = sess.run(gradients_w_raw, feed_dict={model.input: xtrain[o,:,:].reshape(1,window_size,ny)})
             gradients_x = sess.run(gradients_x_raw, feed_dict={model.input: xtrain[o,:,:].reshape(1,window_size,ny)})
             gradients_x=gradients_x[0]
             
+            #evaluate jacobians
             jacob=jacobians(x_hat[nw+ny*o][0],x_hat[nw+ny*o+1][0],x_hat[nw+ny*o+2][0])
            
             
 
             k=0
+            #store jacobian matrix
             for j in range(len(gradients_w)):
                 weights=gradients_w[j]
                 weights=np.reshape(weights,(weights.size,))
                  
                 dfi_dw[k:weights.size+k]=weights
                 k=weights.size+k
-                
+             ## Fill and update jacobian matrix 
             dVb_dx=np.array([1+dt*jacob[0,0],dt*jacob[0,1],dt*jacob[0,2]])    
             dPb_dx=np.array([dt*jacob[1,0],1+dt*jacob[1,1],dt*jacob[1,2]])
             dfi_dx=np.reshape(gradients_x[0,-1,:],(int(nx/batch_size),))
@@ -317,8 +334,11 @@ for i in range(epochs):
         F4=F[nw:,nw:nw+nx]
         
         tic= time.time()
+        #update prediction covariance
         Pw=Pw+Qw
+        #upscale pressure
         xtrain[:,:,1]=(1000)*xtrain[:,:,1]
+        #predict
         for j in range(batch_size):
         #model_b.fit(xtrain, z[m,1].reshape((1,)), epochs=1,batch_size=1)
             t1=t[index[j]:index[j]+2]
@@ -341,14 +361,19 @@ for i in range(epochs):
         Kx=np.matmul(Px,np.matmul(C.T,Sinv))
          
         inter=x_hat[-nx:]
+        #get measurements
         meas=np.array([])
         for ik in range(batch_size):
               meas=np.append(meas,inter[[ny*ik,ny*ik+1]])
+        
         meas=meas.reshape((nm,1))
         e1=z[index[0:-1],:].reshape(nx,1)-x_hat[-nx:]
         e=z[index[0:-1],0:2].reshape(nm,1)-meas
         x_=x_hat[-nx:].copy()
+        #update states with hidden state
         x_hat[-nx:]=x_hat[-nx:]+ np.matmul(Kx,(e))
+        
+        ##constrain Nba  to enforce identifiablity
         #relu
         x_hat[-1]=np.maximum(0.5,np.minimum(2,x_hat[-1]))
         
@@ -359,6 +384,7 @@ for i in range(epochs):
         Kw=np.matmul(Pw,np.matmul(C_kw.T,Sinv))
        
         e_=x_hat[-nx:]-x_
+        #update weights
         x_hat[:nw]=x_hat[:nw]+ np.matmul(Kw,(e_))
         Pw= Pw-np.matmul(Kw,np.matmul(C_kw,Pw))
         
@@ -386,6 +412,7 @@ for i in range(epochs):
         # toc = time.time()
         # print("3",toc-tic)
         
+        #update LUT states
         for o in range(batch_size):
              [LUTs[o].Vb,LUTs[o].Tb,LUTs[o].Nba]=x_hat[nw+ny*o:nw+ny*(o+1)]
              
@@ -396,7 +423,7 @@ for i in range(epochs):
      
     
       
-       
+       #update NN weights
        
         k=0
         for j,layer in enumerate(model.layers):
@@ -422,12 +449,12 @@ for i in range(epochs):
     #mse_epochs[i,:]=np.mean(abs(mse))
     #print(mse_epochs[i,:],Q[1,1])
     
-    
+    # reduce Qw every two epochs
     if (np.remainder(i,2)==0 and Qw[0,0] >=1e-1):
              Qw=1e-1*Qw
      #     R=1e-1*R
         
-         
+ ##save results neural network and integrate learned ODEs        
 model.save("LUT_model_1.4_1.keras")
 LUT_nn=LUT()
 [LUT_nn.Vb,LUT_nn.Pb,LUT_nn.Nba]=z[0,-ny:]
@@ -436,6 +463,7 @@ x_end=np.zeros((ny,iterations))
 x_end[:,0]=[Vb,Pb,Nba]
 xtrain=np.zeros((1,window_size,ny))
 xtrain=mem[0].reshape((1,mem[0].shape[0],mem[0].shape[1],))
+## ODE instegration when learning is done
 for m in range(iterations-window_size): 
     t1=t[m:m+2]
     if m < window_size:

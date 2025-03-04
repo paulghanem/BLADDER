@@ -13,18 +13,17 @@ import numpy as np
 import sys 
 import matplotlib.pyplot as plt
 from keras.models import Sequential
-from keras.utils.np_utils import to_categorical
+from keras.utils import to_categorical
 from keras.layers import Conv2D,MaxPooling2D,Flatten,Dense,Dropout,SimpleRNN,LSTM
 import math 
 from timeit import  time
-from tqdm import tqdm
+#from tqdm import tqdm
 from keras import backend as ker
 
 tf.compat.v1.disable_eager_execution() 
 tf.compat.v1.experimental.output_all_intermediates(True)
 
 sys.path.insert(0, '/Users/siliconsynapse/Desktop/multistream_Kalman_filter/multistream_Kalman_filter/Python_LUT_Model1.4_10282023/Python_LUT_Model1.4_10282023')
-
 
 
 from scipy.integrate import odeint
@@ -108,7 +107,7 @@ for i in range(iterations-1):
     t1=t[i:i+2]
      
     LUT1.forward(LUT1.Vb,LUT1.Pb,LUT1.Nba,t1)  
-    z[i,:]=[LUT1.Vb+0*np.random.normal(0, 1e-2, 1), LUT1.Pb+ 0*np.random.normal(0, 1e-2, 1), LUT1.Nba+ 0*np.random.normal(0, 1e-2, 1)]
+    z[i,:]=[LUT1.Vb, LUT1.Pb, LUT1.Nba]
 
 
 
@@ -402,7 +401,7 @@ for i in range(epochs):
      #     R=1e-1*R
         
          
-model.save("LUT_model_1.4.keras")
+#model.save("LUT_model_1.4.keras")
 LUT_nn=LUT()
 [Vb,Pb,Nba]=np.array([LUT_nn.Vb,LUT_nn.Pb,LUT_nn.Nba])
 x_end=np.zeros((ny,iterations))
@@ -423,7 +422,8 @@ for m in range(iterations-window_size):
     x_end[-ny:,m+1]=sf
        
      
-
+np.save('x_end.npy', x_end)
+np.save('z.npy',z)
 #plt.plot(t,z,t,model.predict(t))
 
      
